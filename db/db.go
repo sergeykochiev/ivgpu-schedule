@@ -22,56 +22,40 @@ type User struct {
 var (
 	ErrNoUser = errors.New("Пользователь не найден")
 	ErrNoGroupId = errors.New("Группа пользователя не найдена")
-	ErrMigrateFailed = errors.New("Не удалось популяризировать БД")
+	ErrDbNotInit = errors.New("БД не инициализирована")
 )
 
-const CreateQuery = `CREATE TABLE TgUsers ( Id SERIAL PRIMARY KEY, InstituteAbr VARCHAR(50) DEFAULT '', GroupId INT DEFAULT 0, GroupName VARCHAR(50) DEFAULT '', Week INT DEFAULT 0 );`
+func PostgresConnStr(user, password, host, port, name, params string) string {
+	return fmt.Sprintf(
+		"postgresql://%s:%s@%s:%s/%s?%s",
+		user, password, host, port, name, params,
+	)
+}
 
-func (u* User) scan(rows *sql.Rows) error {
-	return rows.Scan(&u.Id, &u.InstituteAbr, &u.GroupId, &u.GroupName)
+func (u* User) scan(row *sql.Row) error {
+	return row.Scan(&u.Id, &u.InstituteAbr, &u.GroupId, &u.GroupName)
 }
 
 func InitAppDb(name, connStr string) (db AppDb, err error) {
 	db.Conn, err = sql.Open(name, connStr)
 	if _, err = db.Conn.Query("select * from TgUsers limit 1"); err != nil {
-		err = db.createTables()
-		if err != nil {
-			err = errors.Join(ErrMigrateFailed, err)
-		}
+		err = ErrDbNotInit
+		return
 	}
   return
 }
 
-func (db* AppDb) createTables() (err error) {
-	_, err = db.Conn.Exec(CreateQuery)
-	return
-}
-
 func (db* AppDb) CreateUser(id int) (err error) {
 	_, err = db.Conn.Exec("insert into TgUsers (Id) values ($1)", id)
-	fmt.Println(1)
-	return
-}
-
-func userFromRows(rows *sql.Rows) (user User, err error) {
-	nextRes := rows.Next()
-	if !nextRes {
-		err = rows.Err()
-		if errors.Is(err, sql.ErrNoRows) {
-			err = ErrNoUser
-		}
-		return
-	}
-	err = user.scan(rows)
 	return
 }
 
 func (db* AppDb) GetUserById(id int) (user User, err error) {
-	result, err := db.Conn.Query("select Id, InstituteAbr, GroupId, GroupName from TgUsers where id = $1", id)
-	if err == nil {
-		user, err = userFromRows(result)
+	row := db.Conn.QueryRow("select Id, InstituteAbr, GroupId, GroupName from TgUsers where id = $1", id)
+	err = user.scan(row)
+	if err != nil {
+		err = ErrNoUser
 	}
-	defer result.Close()
 	return
 }
 

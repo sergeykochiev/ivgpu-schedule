@@ -1,0 +1,7 @@
+CREATE TABLE TgUsers (
+	Id SERIAL PRIMARY KEY,
+	InstituteAbr VARCHAR(50) DEFAULT '',
+	GroupId INT DEFAULT 0,
+	GroupName VARCHAR(50) DEFAULT '',
+	Week INT DEFAULT 0
+);

@@ -59,16 +59,16 @@ type MainApp struct {
 
 const AppDbName = "schedule.db"
 
-func initMainApp(token string, numWorkers int, whitelist []string) (app MainApp) {
+func initMainApp(token string, numWorkers int, whitelist []string, logger IAppLogger) (app MainApp) {
 	var err error
 	app.whitelist = whitelist
-	app.logger = AppLogger{}
+	app.logger = logger
 	app.numWorkers = numWorkers
 	app.updChan = make(chan tg.Update, 1)
 	app.groupsSchedules = make(map[int]api.GroupResponse)
 	// TODO handle invalid token
 	app.bot = tg.InitTgBot(token)
-	app.db, err = db.InitAppDb("postgres", common.PostgresConnStr(
+	app.db, err = db.InitAppDb("postgres", db.PostgresConnStr(
 		os.Getenv("POSTGRES_USER"),
 		os.Getenv("POSTGRES_PASSWORD"),
 		os.Getenv("POSTGRES_HOST"),
@@ -122,23 +122,25 @@ func (app *MainApp) handleError(err error, upd tg.Update) {
 	if err == nil {
 		return
 	}
+	app.logger.Err(err)
 	switch err {
 	case db.ErrNoUser:
 		tg.SendMsg(&app.bot, tg.BaseSentMessage{
-			Text: "Используйте команду /start",
+			Text: "1Используйте команду /start",
 			ChatId: upd.ChatId(),
 		})
+		return
 	case db.ErrNoGroupId:
 		tg.SendMsg(&app.bot, tg.BaseSentMessage{
 			Text: "Сначала выберите группу",
 			ChatId: upd.ChatId(),
 		})
+		return
 	}
 	tg.SendMsg(&app.bot, tg.BaseSentMessage{
 		Text: "Произошла неизвестная ошибка",
 		ChatId: upd.ChatId(),
 	})
-	app.logger.Err(err)
 }
 
 
@@ -235,7 +237,7 @@ func (app *MainApp) acceptInstituteChoice(upd tg.Update, user db.User, query com
  
 func (app *MainApp) handleCallbackQuery(upd tg.Update) error {
 	query := common.ParseCallbackData(upd.CallbackQuery.Data)
-	user, err := app.db.GetUserById(upd.CallbackQuery.From.Id)
+	user, err := app.db.GetUserById(upd.ChatId())
 	if err != nil {
 		return err
 	}
@@ -406,7 +408,6 @@ func (app *MainApp) NewWorker() {
 		if !slices.Contains(app.whitelist, strconv.Itoa(upd.ChatId())) {
 			continue	
 		}
-		app.logger.Info("Получено сообщение")
 		app.handleError(app.handleUpdate(upd), upd)
 	}
 }
@@ -432,29 +433,28 @@ func (app *MainApp) GetUpdates() {
 // TODO:
 // - timer to reset schedule cache daily?
 func main() {
-	var err error
-
+	logger := AppLogger{}
 	godotenv.Load()
 
 	token := os.Getenv("TOKEN")
 	if token == "" {
-		log.Fatal("Предоставьте токен через ENV")
+		logger.Panic("Предоставьте токен через ENV")
 	}
 
-	numWorkers := 1
-	if len(os.Args) >= 2 {
-		numWorkers, err = strconv.Atoi(os.Args[1])
-		if err != nil {
-			log.Print("Не удалось получить количество воркеров, по умолчанию используется " + strconv.Itoa(numWorkers))
-		}
+	numWorkers, err := strconv.Atoi(os.Getenv("NUM_WORKERS"))
+	if err != nil {
+		logger.Warn("Количество воркеров не предоставлено, используется 1 по умолчанию")
+		numWorkers = 1
 	}
 
 	whitelist := []string{}
 	if whitelistEnv := os.Getenv("WHITELIST"); whitelistEnv != "" {
 		whitelist = strings.Split(whitelistEnv, ",")
+	} else {
+		logger.Warn("Вайтлист пустой!")
 	}
 
-	mainApp := initMainApp(token, numWorkers, whitelist)
+	mainApp := initMainApp(token, numWorkers, whitelist, logger)
 	log.Println("Приложение запущено")
 	mainApp.GetUpdates()
 }

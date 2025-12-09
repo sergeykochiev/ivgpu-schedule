@@ -56,13 +56,6 @@ func (cd CallbackData) ToJson() string {
 	return string(out)
 }
 
-func PostgresConnStr(user, password, host, port, name, params string) string {
-	return fmt.Sprintf(
-		"postgresql://%s:%s@%s:%s/%s?%s",
-		user, password, host, port, name, params,
-	)
-}
-
 func ParseCallbackData(data string) (query CallbackData) { 
 	json.Unmarshal([]byte(data), &query)
 	return
