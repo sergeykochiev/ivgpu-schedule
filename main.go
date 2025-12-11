@@ -364,7 +364,7 @@ func (app *MainApp) handleMessage(upd tg.Update) error {
 	if (user == db.User{}) {
 		return db.ErrNoUser
 	}
-	t := time.Now()
+	t := time.Now().Add(time.Hour * 3);
 	if common.StartsWith(upd.Message.Text, common.ReplyKeyboardButtonChangeGroup) {
 		return app.initInstituteChoice(upd)
 	}

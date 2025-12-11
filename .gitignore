@@ -3,3 +3,4 @@ go.sum
 .env
 build
 .*.db
+**/pg*
