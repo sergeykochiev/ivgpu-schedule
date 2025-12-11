@@ -126,7 +126,7 @@ func (app *MainApp) handleError(err error, upd tg.Update) {
 	switch err {
 	case db.ErrNoUser:
 		tg.SendMsg(&app.bot, tg.BaseSentMessage{
-			Text: "1Используйте команду /start",
+			Text: "Используйте команду /start",
 			ChatId: upd.ChatId(),
 		})
 		return
@@ -405,7 +405,7 @@ func (app *MainApp) handleUpdate(upd tg.Update) error {
 
 func (app *MainApp) NewWorker() {
 	for upd := range app.updChan {
-		if !slices.Contains(app.whitelist, strconv.Itoa(upd.ChatId())) {
+		if len(app.whitelist) > 0 && !slices.Contains(app.whitelist, strconv.Itoa(upd.ChatId())) {
 			continue	
 		}
 		app.handleError(app.handleUpdate(upd), upd)
