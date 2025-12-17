@@ -114,7 +114,7 @@ func totime(date string) (t time.Time) {
 }
 
 func timeBetween(t time.Time, start time.Time, end time.Time) bool {
-	return t.Compare(start) >= 0 && t.Compare(end) <= 0
+	return t.Compare(start) >= 0 && t.Compare(end) < 0
 }
 
 func (gr GroupResponse) Exams() string {
@@ -137,7 +137,7 @@ func (gr GroupResponse) ByDate(t time.Time, userWeek int) string {
 	var end time.Time
 	for _, schedule = range(gr.Schedule) {
 		start = totime(schedule.StartDate)
-		end = totime(schedule.StartDate)
+		end = totime(schedule.EndDate)
 		if timeBetween(t, start, end) {
 			break
 		}
