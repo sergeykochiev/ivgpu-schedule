@@ -1,6 +1,7 @@
 package common
 
 import (
+	"time"
 	"fmt"
 	"net/http"
 	"bytes"
@@ -54,6 +55,13 @@ var Weeknames = [3]string{"Текущая", "Первая", "Вторая"}
 func (cd CallbackData) ToJson() string {
 	out, _ := json.Marshal(cd)
 	return string(out)
+}
+
+func WeekdayToISO(weekday time.Weekday) int {
+	if (weekday == 0) {
+		return 6;
+	}
+	return int(weekday - 1);
 }
 
 func ParseCallbackData(data string) (query CallbackData) { 

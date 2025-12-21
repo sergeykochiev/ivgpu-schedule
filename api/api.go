@@ -142,7 +142,7 @@ func (gr GroupResponse) ByDate(t time.Time, userWeek int) string {
 			break
 		}
 	}
-	weekDay := int(t.Weekday()) - 1
+	weekDay := common.WeekdayToISO(t.Weekday())
 	week := userWeek
 	if userWeek == 0 {
 		week = schedule.WeekStart
