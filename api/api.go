@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"slices"
 	"net/http"
 	"encoding/json"
 	"github.com/sergeykochiev/ivgpu-schedule/common"
@@ -113,6 +114,10 @@ func totime(date string) (t time.Time) {
 	return
 }
 
+func fromtime(t time.Time) string {
+	return t.Format(DateLayout);
+}
+
 func timeBetween(t time.Time, start time.Time, end time.Time) bool {
 	return t.Compare(start) >= 0 && t.Compare(end) < 0
 }
@@ -156,9 +161,13 @@ func (gr GroupResponse) ByDate(t time.Time, userWeek int) string {
 	}
 	var lessons LessonsOnPeriod
 	for _, lesson := range(schedule.LessonsOnPeriod) {
-		if lesson.WeekDay == weekDay && lesson.Week == week {
-			lessons = append(lessons, lesson)
+		if lesson.WeekDay != weekDay || lesson.Week != week {
+			continue
 		}
+		if len(lesson.Dates) > 0 && !slices.Contains(lesson.Dates, fromtime(t)) {
+			continue
+		}
+		lessons = append(lessons, lesson)
 	}
 	return fmt.Sprintf(
 		"Расписание на %d.%d, %s\n\n%s",
