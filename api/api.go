@@ -164,7 +164,7 @@ func (gr GroupResponse) ByDate(t time.Time, userWeek int) string {
 		if lesson.WeekDay != weekDay || lesson.Week != week {
 			continue
 		}
-		if len(lesson.Dates) > 0 && !slices.Contains(lesson.Dates, fromtime(t)) {
+		if userWeek == 0 && len(lesson.Dates) > 0 && !slices.Contains(lesson.Dates, fromtime(t)) {
 			continue
 		}
 		lessons = append(lessons, lesson)
