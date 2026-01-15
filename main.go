@@ -16,33 +16,35 @@ import (
 	"github.com/sergeykochiev/ivgpu-schedule/common"
 )
 
+const (
+	LogInfo string = " INFO "
+	LogWarn string = " WARN "
+	LogErr string = " ERR "
+)
+
 type IAppLogger interface {
-	Info(a ...any)
-	Warn(a ...any)
-	Err(a ...any)
-	Panic(a ...any)
+	Log(string, ...any)
+	Fatal(...any)
 }
 
-type AppLogger struct{} 
-
-func (l AppLogger) Info(a ...any) {
-	log.Println(a...)
+type FileLogger struct {
+	logfile *os.File
 }
 
-func (l AppLogger) Warn(a ...any) {
-	fmt.Print("\033[33m")
-	log.Print(a...)
-	fmt.Println("\033[39m")
+func NewFileLogger(logfile *os.File) FileLogger {
+	return FileLogger{
+		logfile: logfile,
+	}
 }
 
-func (l AppLogger) Err(a ...any) {
-	fmt.Print("\033[31m")
-	log.Print(a...)
-	fmt.Println("\033[39m")
+func (l FileLogger) Log(lvlPrefix string, msg ...any) {
+	fmt.Fprint(l.logfile, time.Now())
+	fmt.Fprint(l.logfile, lvlPrefix)
+	fmt.Fprintln(l.logfile, msg...)
 }
 
-func (l AppLogger) Panic(a ...any) {
-	l.Err(a...)
+func (l FileLogger) Fatal(msg ...any) {
+	l.Log(LogErr, msg...)
 	os.Exit(1)
 }
 
@@ -77,13 +79,13 @@ func initMainApp(token string, numWorkers int, whitelist []string, logger IAppLo
 		"sslmode=disable",
 	))
 	if err != nil {
-		app.logger.Panic("Не удалось подключиться к БД: " + err.Error())
+		app.logger.Fatal("Не удалось подключиться к БД: " + err.Error())
 	}
 	app.db.Conn.SetMaxOpenConns(numWorkers)
 	app.db.Conn.SetMaxIdleConns(numWorkers) 
 	app.grouplist, err = api.GetGrouplist()
 	if err != nil {
-		app.logger.Panic("Не удалось получить список групп: " + err.Error())
+		app.logger.Fatal("Не удалось получить список групп: " + err.Error())
 	}
 	return
 }
@@ -122,7 +124,7 @@ func (app *MainApp) handleError(err error, upd tg.Update) {
 	if err == nil {
 		return
 	}
-	app.logger.Err(err)
+	app.logger.Log(LogErr, err)
 	switch err {
 	case db.ErrNoUser:
 		tg.SendMsg(&app.bot, tg.BaseSentMessage{
@@ -189,7 +191,7 @@ func (app *MainApp) handleCommand(upd tg.Update) error {
 			}
 			return app.initInstituteChoice(upd)
 		default:
-			app.logger.Warn("Получена неизвестная команда: " + upd.Message.Text[1:])
+			app.logger.Log(LogErr, "Unsupported command: ", upd.Message.Text[1:])
 	}
 	return nil
 }
@@ -257,7 +259,7 @@ func (app *MainApp) handleCallbackQuery(upd tg.Update) error {
 	case common.CallbackQueryTypeChangeInstitute:
 		return app.initInstituteChoiceQuery(upd, query)
 	default:
-		app.logger.Err("НЕДОСТИЖИМО: " + query.Typ)
+		app.logger.Log(LogErr, "Unsupported callback query typ: ", query.Typ)
 	}
 	return nil
 }
@@ -414,7 +416,7 @@ func (app *MainApp) NewWorker() {
 
 func (app *MainApp) GetUpdates() {
 	for range app.numWorkers {
-		app.logger.Info("Создан воркер")
+		app.logger.Log(LogInfo, "Worker created")
 		go app.NewWorker()
 	}
 	for {
@@ -433,17 +435,21 @@ func (app *MainApp) GetUpdates() {
 // TODO:
 // - timer to reset schedule cache daily?
 func main() {
-	logger := AppLogger{}
+	logfile, err := os.OpenFile("ivgpu-schedule.log", os.O_CREATE | os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatal("Cannot open log file:", err)
+	}
+	logger := NewFileLogger(logfile)
 	godotenv.Load()
 
 	token := os.Getenv("TOKEN")
 	if token == "" {
-		logger.Panic("Предоставьте токен через ENV")
+		logger.Fatal("Provide token through env")
 	}
 
 	numWorkers, err := strconv.Atoi(os.Getenv("NUM_WORKERS"))
 	if err != nil {
-		logger.Warn("Количество воркеров не предоставлено, используется 1 по умолчанию")
+		logger.Log(LogWarn, "Using default workers of count: 1")
 		numWorkers = 1
 	}
 
@@ -451,10 +457,10 @@ func main() {
 	if whitelistEnv := os.Getenv("WHITELIST"); whitelistEnv != "" {
 		whitelist = strings.Split(whitelistEnv, ",")
 	} else {
-		logger.Warn("Вайтлист пустой!")
+		logger.Log(LogWarn, "Using empty whitelist")
 	}
 
 	mainApp := initMainApp(token, numWorkers, whitelist, logger)
-	log.Println("Приложение запущено")
+	logger.Log(LogInfo, "App running")
 	mainApp.GetUpdates()
 }
