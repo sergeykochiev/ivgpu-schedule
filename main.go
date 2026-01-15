@@ -61,8 +61,7 @@ type MainApp struct {
 
 const AppDbName = "schedule.db"
 
-func initMainApp(token string, numWorkers int, whitelist []string, logger IAppLogger) (app MainApp) {
-	var err error
+func initMainApp(token string, numWorkers int, whitelist []string, logger IAppLogger) (app MainApp, err error) {
 	app.whitelist = whitelist
 	app.logger = logger
 	app.numWorkers = numWorkers
@@ -79,13 +78,14 @@ func initMainApp(token string, numWorkers int, whitelist []string, logger IAppLo
 		"sslmode=disable",
 	))
 	if err != nil {
-		app.logger.Fatal("Не удалось подключиться к БД: " + err.Error())
+		err = errors.Join(common.ErrConnectDb, err)
+		return
 	}
 	app.db.Conn.SetMaxOpenConns(numWorkers)
 	app.db.Conn.SetMaxIdleConns(numWorkers) 
 	app.grouplist, err = api.GetGrouplist()
 	if err != nil {
-		app.logger.Fatal("Не удалось получить список групп: " + err.Error())
+		err = errors.Join(common.ErrGetGroupList, err)
 	}
 	return
 }
@@ -126,13 +126,13 @@ func (app *MainApp) handleError(err error, upd tg.Update) {
 	}
 	app.logger.Log(LogErr, err)
 	switch err {
-	case db.ErrNoUser:
+	case common.ErrNoUser:
 		tg.SendMsg(&app.bot, tg.BaseSentMessage{
 			Text: "Используйте команду /start",
 			ChatId: upd.ChatId(),
 		})
 		return
-	case db.ErrNoGroupId:
+	case common.ErrNoGroupId:
 		tg.SendMsg(&app.bot, tg.BaseSentMessage{
 			Text: "Сначала выберите группу",
 			ChatId: upd.ChatId(),
@@ -183,17 +183,18 @@ func (app *MainApp) handleCommand(upd tg.Update) error {
 	switch (upd.Message.Text[1:]) {
 		case "start":
 			_, err := app.db.GetUserById(upd.ChatId())
-			if errors.Is(err, db.ErrNoUser) {
+			if errors.Is(err, common.ErrNoUser) {
 				err = app.db.CreateUser(upd.ChatId())
-			}
-			if err != nil {
-				return err
+				if err != nil {
+					return errors.Join(common.ErrCreateUser, err)
+				}
+			} else if err != nil {
+				return errors.Join(common.ErrGetUserById, err)
 			}
 			return app.initInstituteChoice(upd)
 		default:
-			app.logger.Log(LogErr, "Unsupported command: ", upd.Message.Text[1:])
+			return fmt.Errorf("Unsupported command: %s", upd.Message.Text[1:])
 	}
-	return nil
 }
 
 func (app *MainApp) acceptGroupChoice(upd tg.Update, user db.User, query common.CallbackData) error {
@@ -213,7 +214,7 @@ func (app *MainApp) acceptGroupChoice(upd tg.Update, user db.User, query common.
 		}
 	}
 	if err := app.db.SetUserGroup(user.Id, groupId, groupName); err != nil {
-		return err
+		return errors.Join(common.ErrSetGroup, err)
 	}
 	err := tg.EditMsg(&app.bot, tg.BaseEditedMessage{
 		Text: "Группа изменена успешно",
@@ -221,7 +222,7 @@ func (app *MainApp) acceptGroupChoice(upd tg.Update, user db.User, query common.
 		ChatId: upd.ChatId(),
 	})
 	if err != nil {
-		return err
+		return errors.Join(common.ErrEditMsg, err)
 	}
 	return tg.SendMsg(&app.bot, tg.SentMessage[tg.ReplyKeyboardMarkup]{
 		ChatId: upd.ChatId(),
@@ -232,48 +233,64 @@ func (app *MainApp) acceptGroupChoice(upd tg.Update, user db.User, query common.
 
 func (app *MainApp) acceptInstituteChoice(upd tg.Update, user db.User, query common.CallbackData) error {
 	if err := app.db.SetUserInstitute(user.Id, query.Data); err != nil {
-		return err
+		return errors.Join(common.ErrSetUserInst, err)
 	}
-	return app.initGroupChoice(upd, query)
+	err := app.initGroupChoice(upd, query)
+	if err != nil {
+		return errors.Join(common.ErrInitGroupChoice, err)
+	}
+	return nil
 }
  
 func (app *MainApp) handleCallbackQuery(upd tg.Update) error {
 	query := common.ParseCallbackData(upd.CallbackQuery.Data)
 	user, err := app.db.GetUserById(upd.ChatId())
 	if err != nil {
-		return err
+		return errors.Join(common.ErrGetUserById, err)
 	}
 	if (user == db.User{}) {
-		return db.ErrNoUser
+		return common.ErrNoUser
 	}
 	if query.MessageId == 0 {
 		query.MessageId = upd.CallbackQuery.Message.MessageId
 	}
 	switch (query.Typ) {
 	case common.CallbackQueryTypeInstitute:
-		return app.acceptInstituteChoice(upd, user, query)
+		err = app.acceptInstituteChoice(upd, user, query)
+		if err != nil {
+			return errors.Join(common.ErrAcceptInstChoice, err)
+		}
 	case common.CallbackQueryTypeGroups:
-		return app.acceptGroupChoice(upd, user, query)
+		err = app.acceptGroupChoice(upd, user, query)
+		if err != nil {
+			return errors.Join(common.ErrAcceptGroupChoice, err)
+		}
 	case common.CallbackQueryTypeWeek:
-		return app.acceptWeekChoice(upd, user, query)
+		err = app.acceptWeekChoice(upd, user, query)
+		if err != nil {
+			return errors.Join(common.ErrAcceptWeekChoice, err)
+		}
 	case common.CallbackQueryTypeChangeInstitute:
-		return app.initInstituteChoiceQuery(upd, query)
+		err = app.initInstituteChoiceQuery(upd, query)
+		if err != nil {
+			return errors.Join(common.ErrInitInstChoice, err)
+		}
 	default:
-		app.logger.Log(LogErr, "Unsupported callback query typ: ", query.Typ)
+		return fmt.Errorf("Unsupported callback query typ: %s", query.Typ)
 	}
 	return nil
 }
 
 func (app *MainApp) _getSchedule(user db.User) (schedule api.GroupResponse, err error) {
 	if user.GroupId == 0 {
-		err = db.ErrNoGroupId
+		err = common.ErrNoGroupId
 		return
 	}
 	var ok bool
 	if schedule, ok = app.groupsSchedules[user.GroupId]; !ok {
 		schedule, err = api.GetGroup(user.GroupId)
 		if err != nil {
-			err = errors.Join(errors.New("Не удалось получить расписание: "), err)
+			err = errors.Join(common.ErrSetGroup, err)
 			return
 		}
 		app.groupsSchedules[user.GroupId] = schedule
@@ -284,7 +301,7 @@ func (app *MainApp) _getSchedule(user db.User) (schedule api.GroupResponse, err 
 func (app *MainApp) getSchedule(upd tg.Update, user db.User, t time.Time) error {
 	s, err := app._getSchedule(user)
 	if err != nil {
-	  return err
+		return errors.Join(common.ErrGetSchedule, err)
 	}
 	return tg.SendMsg(&app.bot, tg.BaseSentMessage{
 		ChatId: upd.ChatId(),
@@ -295,7 +312,7 @@ func (app *MainApp) getSchedule(upd tg.Update, user db.User, t time.Time) error 
 func (app *MainApp) getExams(upd tg.Update, user db.User) error {
 	s, err := app._getSchedule(user)
 	if err != nil {
-	  return err
+		return errors.Join(common.ErrGetSchedule, err)
 	}
 	return tg.SendMsg(&app.bot, tg.BaseSentMessage{
 		ChatId: upd.ChatId(),
@@ -333,11 +350,11 @@ func (app *MainApp) initWeekChoice(upd tg.Update) error {
 func (app *MainApp) acceptWeekChoice(upd tg.Update, user db.User, query common.CallbackData) error {
 	week, err := strconv.Atoi(query.Data)
 	if err != nil {
-		return err
+		return errors.Join(common.ErrWeekFromData, err)
 	}
 	err = app.db.SetUserWeek(user.Id, week)
 	if err != nil {
-		return err
+		return errors.Join(common.ErrSetWeek, err)
 	}
 	err = tg.EditMsg(&app.bot, tg.BaseEditedMessage{
 		ChatId: upd.ChatId(),
@@ -345,7 +362,7 @@ func (app *MainApp) acceptWeekChoice(upd tg.Update, user db.User, query common.C
 		Text: "Неделя сменена успешно",
 	})
 	if err != nil {
-		return err
+		return errors.Join(common.ErrEditMsg, err)
 	}
 	weekName := common.Weeknames[week]
 	return tg.SendMsg(&app.bot, tg.SentMessage[tg.ReplyKeyboardMarkup]{
@@ -356,53 +373,102 @@ func (app *MainApp) acceptWeekChoice(upd tg.Update, user db.User, query common.C
 }
 
 func (app *MainApp) handleMessage(upd tg.Update) error {
+	var err error
 	if upd.Message.Text[0] == '/' {
-		return app.handleCommand(upd)
+		err = app.handleCommand(upd)
+		if err != nil {
+			return errors.Join(common.ErrCommand, err)
+		}
+		return nil
 	}
 	user, err := app.db.GetUserById(upd.ChatId())
 	if err != nil {
-		return err
+		return errors.Join(common.ErrGetUserById, err)
 	}
 	if (user == db.User{}) {
-		return db.ErrNoUser
+		return common.ErrNoUser
 	}
 	t := time.Now().Add(time.Hour * 3);
 	if common.StartsWith(upd.Message.Text, common.ReplyKeyboardButtonChangeGroup) {
-		return app.initInstituteChoice(upd)
+		err = app.initInstituteChoice(upd)
+		if err != nil {
+			return errors.Join(common.ErrInitInstChoice, err)
+		}
+		return nil
 	}
 	if common.StartsWith(upd.Message.Text, common.ReplyKeyboardButtonChangeWeek) {
-		return app.initWeekChoice(upd)
+		err = app.initWeekChoice(upd)
+		if err != nil {
+			return errors.Join(common.ErrInitWeekChoice, err)
+		}
+		return nil
 	}
 	switch (upd.Message.Text) {
 	case common.ReplyKeyboardButtonExams:
-		return app.getExams(upd, user)
+		err = app.getExams(upd, user)
+		if err != nil {
+			return errors.Join(common.ErrGetExams, err)
+		}
 	case common.ReplyKeyboardButtonToday:
 		user.Week = 0
-		return app.getSchedule(upd, user, t)
+		err = app.getSchedule(upd, user, t)
+		if err != nil {
+			return errors.Join(common.ErrGetToday, err)
+		}
 	case common.ReplyKeyboardButtonTomorrow:
 		user.Week = 0
-		return app.getSchedule(upd, user, t.AddDate(0, 0, 1))
+		err = app.getSchedule(upd, user, t.AddDate(0, 0, 1))
+		if err != nil {
+			return errors.Join(common.ErrGetTomorrow, err)
+		}
 	case common.ReplyKeyboardButtonMonday:
-		return app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 1))
+		err = app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 1))
+		if err != nil {
+			return errors.Join(common.ErrGetMon, err)
+		}
 	case common.ReplyKeyboardButtonTuesday:
-		return app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 2))
+		err = app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 2))
+		if err != nil {
+			return errors.Join(common.ErrGetTue, err)
+		}
 	case common.ReplyKeyboardButtonWednesday:
-		return app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 3))
+		err = app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 3))
+		if err != nil {
+			return errors.Join(common.ErrGetWed, err)
+		}
 	case common.ReplyKeyboardButtonThursday:
-		return app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 4))
+		err = app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 4))
+		if err != nil {
+			return errors.Join(common.ErrGetThu, err)
+		}
 	case common.ReplyKeyboardButtonFriday:
-		return app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 5))
+		err = app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 5))
+		if err != nil {
+			return errors.Join(common.ErrGetFri, err)
+		}
 	case common.ReplyKeyboardButtonSaturday:
-		return app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 6))
+		err = app.getSchedule(upd, user, t.AddDate(0, 0, -int(t.Weekday()) + 6))
+		if err != nil {
+			return errors.Join(common.ErrGetSat, err)
+		}
 	}
 	return nil
 }
 
 func (app *MainApp) handleUpdate(upd tg.Update) error {
+	var err error
 	if upd.IsCallbackQuery() {
-		return app.handleCallbackQuery(upd)
+		err = app.handleCallbackQuery(upd)
+		if err != nil {
+			err = errors.Join(common.ErrHandleQuery, err)
+		}
+		return err 
 	}
-	return app.handleMessage(upd)
+	err = app.handleMessage(upd)
+	if err != nil {
+		err = errors.Join(common.ErrHandleMessage, err)
+	}
+	return err
 }
 
 func (app *MainApp) NewWorker() {
@@ -422,7 +488,7 @@ func (app *MainApp) GetUpdates() {
 	for {
 		upds, err := app.bot.GetUpdates()
 		if err != nil {
-			app.handleError(err, tg.Update{})
+			app.handleError(errors.Join(common.ErrGetUpdates, err), tg.Update{})
 			continue
 		}
 		for _, upd := range upds {
@@ -460,7 +526,10 @@ func main() {
 		logger.Log(LogWarn, "Using empty whitelist")
 	}
 
-	mainApp := initMainApp(token, numWorkers, whitelist, logger)
+	mainApp, err := initMainApp(token, numWorkers, whitelist, logger)
+	if err != nil {
+		logger.Fatal(errors.Join(common.ErrInit, err))
+	}
 	logger.Log(LogInfo, "App running")
 	mainApp.GetUpdates()
 }

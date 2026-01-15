@@ -5,6 +5,7 @@ import (
 	_ "github.com/lib/pq"
 	"errors"
 	"fmt"
+	"github.com/sergeykochiev/ivgpu-schedule/common"
 )
 
 type AppDb struct {
@@ -18,12 +19,6 @@ type User struct {
 	GroupName string
 	Week int
 }
-
-var (
-	ErrNoUser = errors.New("Пользователь не найден")
-	ErrNoGroupId = errors.New("Группа пользователя не найдена")
-	ErrDbNotInit = errors.New("БД не инициализирована")
-)
 
 func PostgresConnStr(user, password, host, port, name, params string) string {
 	return fmt.Sprintf(
@@ -39,7 +34,7 @@ func (u* User) scan(row *sql.Row) error {
 func InitAppDb(name, connStr string) (db AppDb, err error) {
 	db.Conn, err = sql.Open(name, connStr)
 	if _, err = db.Conn.Query("select * from TgUsers limit 1"); err != nil {
-		err = ErrDbNotInit
+		err = errors.Join(common.ErrDbNotInit, err)
 		return
 	}
   return
@@ -54,7 +49,7 @@ func (db* AppDb) GetUserById(id int) (user User, err error) {
 	row := db.Conn.QueryRow("select Id, InstituteAbr, GroupId, GroupName from TgUsers where id = $1", id)
 	err = user.scan(row)
 	if err != nil {
-		err = ErrNoUser
+		err = errors.Join(common.ErrNoUser, err)
 	}
 	return
 }
